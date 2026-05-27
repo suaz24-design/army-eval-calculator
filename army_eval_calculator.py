@@ -23,16 +23,11 @@ NON_RATED_CODES = [
 ]
 
 def check_overlaps(periods):
-    """
-    Checks a list of date periods for any overlapping days.
-    periods: list of dicts with 'start' and 'end' dates.
-    """
+    """Checks a list of date periods for any overlapping days."""
     if not periods:
         return False
-    # Sort periods by start date
     sorted_periods = sorted(periods, key=lambda x: x['start'])
     for i in range(1, len(sorted_periods)):
-        # If the current period's start date is on or before the previous period's end date, it's an overlap.
         if sorted_periods[i]['start'] <= sorted_periods[i-1]['end']:
             return True
     return False
@@ -67,10 +62,9 @@ def main():
 
     # Initialize session state for non-rated periods
     if 'nr_periods' not in st.session_state:
-        # Start with an empty dataframe containing the necessary columns
         st.session_state.nr_periods = pd.DataFrame(columns=["Start Date", "End Date", "Code"])
 
-    # Use Streamlit's dynamic data editor for a clean, Excel-like input experience
+    # Use Streamlit's dynamic data editor
     edited_df = st.data_editor(
         st.session_state.nr_periods,
         column_config={
@@ -94,12 +88,17 @@ def main():
 
     # Process each row from the data editor
     for index, row in edited_df.iterrows():
-        start = row["Start Date"]
-        end = row["End Date"]
+        raw_start = row["Start Date"]
+        raw_end = row["End Date"]
         code = row["Code"]
 
-        if pd.isna(start) or pd.isna(end) or pd.isna(code):
+        if pd.isna(raw_start) or pd.isna(raw_end) or pd.isna(code):
             continue # Skip incomplete rows
+
+        # --- THE BUG FIX IS HERE ---
+        # Force whatever format the table spits out back into a standard Python date object
+        start = pd.to_datetime(raw_start).date()
+        end = pd.to_datetime(raw_end).date()
 
         # Validation A: Start must be before End
         if start > end:
@@ -129,8 +128,6 @@ def main():
 
     # The Math IAW DA PAM 623-3
     total_rated_days = total_calendar_days - total_nr_days
-    
-    # Months are calculated by dividing total rated days by 30. Remainder is days.
     rated_months = total_rated_days // 30
     leftover_days = total_rated_days % 30
 
@@ -151,7 +148,6 @@ def main():
         sorted_periods = sorted(valid_periods, key=lambda x: x['start'])
         codes_used = []
         for p in sorted_periods:
-            # Extract just the single letter code from the string (e.g., "I" from "I - In transit")
             letter_code = p['code'].split(" - ")[0]
             codes_used.append(letter_code)
         
