@@ -64,12 +64,12 @@ def main():
     if 'nr_periods' not in st.session_state:
         st.session_state.nr_periods = pd.DataFrame(columns=["Start Date", "End Date", "Code"])
 
-    # Use Streamlit's dynamic data editor
+   # Use Streamlit's dynamic data editor
     edited_df = st.data_editor(
         st.session_state.nr_periods,
         column_config={
-            "Start Date": st.column_config.DateColumn("Start Date", required=True),
-            "End Date": st.column_config.DateColumn("End Date", required=True),
+            "Start Date": st.column_config.DateColumn("Start Date", format="YYYY/MM/DD", required=True),
+            "End Date": st.column_config.DateColumn("End Date", format="YYYY/MM/DD", required=True),
             "Code": st.column_config.SelectboxColumn("Non-Rated Code", options=NON_RATED_CODES, required=True)
         },
         num_rows="dynamic",
