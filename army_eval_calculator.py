@@ -105,22 +105,22 @@ def main():
     # ==========================================
     with tabs[0]:
         st.header("1. Evaluation Parameters")
+        
+        # --- NEW: EVAL TYPE GLOSSARY ---
+        with st.expander("📖 Evaluation Type Guide (Click for definitions)"):
+            st.markdown("""
+            * **Annual:** Covers 12 months (or more) of rated duty; the standard yearly report.
+            * **Change of Rater:** Mandatory when the Rater changes.
+            * **Change of Duty:** Used when the Soldier's duty position changes significantly.
+            * **Extended Annual:** An Annual report covering a period longer than 12 months.
+            * **Relief for Cause:** Required when a soldier is relieved from duty for poor performance or conduct.
+            * **Complete the Record:** Prepared for promotion board consideration when the soldier has no evaluation on file for a significant period.
+            * **Academic:** Used for students attending full-time military/civilian schooling.
+            """)
+        
         col_comp, col_eval = st.columns(2)
         with col_comp: component = st.selectbox("Army Component", options=["Active Duty", "USAR / ARNG"])
         with col_eval: eval_type = st.selectbox("Type of Evaluation", options=EVAL_TYPES)
-
-        min_days = 90 if component == "Active Duty" else 120
-        if eval_type in ["Relief for Cause", "Academic"]: min_days = 0 
-        
-        st.divider()
-        st.header("2. Base Rating & Guardrails")
-        
-        date_range = st.date_input("📅 Select Rating Period (Click Start Date, then click End Date)", value=(), format="YYYY/MM/DD")
-        
-        st.caption("Advanced Guardrails (Optional - Leave blank if unsure)")
-        col3, col4 = st.columns(2)
-        with col3: prev_thru_str = st.text_input("Prior Eval Thru (Optional YYYYMMDD)", max_chars=8)
-        with col4: rater_sig_str = st.text_input("Rater Sig Date (Optional YYYYMMDD)", max_chars=8)
 
         if len(date_range) != 2:
             st.info("👆 Please select both a **From Date** and a **Thru Date** on the calendar above to continue.")
