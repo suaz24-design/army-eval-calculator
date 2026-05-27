@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-import io
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Army Eval Date Calculator v3.0", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Army Eval Date Calculator v3.1", page_icon="🦅", layout="wide")
 
 # --- DATA DICTIONARIES ---
 NON_RATED_CODES = [
@@ -39,7 +38,7 @@ def check_overlaps(periods):
 
 # --- MAIN APP ---
 def main():
-    st.title("🦅 Army Evaluation Date Calculator v3.0")
+    st.title("🦅 Army Evaluation Date Calculator")
     st.markdown("Automates IPPS-A date math and enforces rating minimums IAW AR/DA PAM 623-3.")
 
     # UI Polish: Hide the glossary in an expander to save space
@@ -53,141 +52,158 @@ def main():
         * **T (TDY):** Temporary duty away from the rated position.
         """)
 
-    # --- TAB SETUP ---
-    tab1, tab2 = st.tabs(["👤 Single Evaluation Planner", "📑 Bulk IPPS-A Processing (PERSTAT)"])
+    # --- 1. EVALUATION PARAMETERS ---
+    st.header("1. Evaluation Parameters")
+    col_comp, col_eval, col_target = st.columns(3)
+    with col_comp:
+        component = st.selectbox("Army Component", options=["Active Duty", "USAR / ARNG"])
+    with col_eval:
+        eval_type = st.selectbox("Type of Evaluation", options=EVAL_TYPES)
+    with col_target:
+        # The Board Forecaster input
+        board_date_str = st.text_input("Target Board/Close Date (Optional YYYYMMDD)", max_chars=8, placeholder="e.g. 20260701")
 
-    with tab1:
-        # --- 1. EVALUATION PARAMETERS ---
-        st.header("1. Evaluation Parameters")
-        col_comp, col_eval, col_target = st.columns(3)
-        with col_comp:
-            component = st.selectbox("Army Component", options=["Active Duty", "USAR / ARNG"])
-        with col_eval:
-            eval_type = st.selectbox("Type of Evaluation", options=EVAL_TYPES)
-        with col_target:
-            # The Board Forecaster input
-            board_date_str = st.text_input("Target Board/Close Date (Optional YYYYMMDD)", max_chars=8, placeholder="e.g. 20260701")
+    min_days = 90 if component == "Active Duty" else 120
+    if eval_type == "Relief for Cause":
+        min_days = 0 
 
-        min_days = 90 if component == "Active Duty" else 120
-        if eval_type == "Relief for Cause":
-            min_days = 0 
+    st.divider()
+
+    # --- 2. BASE RATING PERIOD (STRICT 8-DIGIT TEXT INPUT) ---
+    st.header("2. Base Rating Period")
+    st.caption("Enter dates strictly as 8 numbers (YYYYMMDD). No slashes required.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        from_str = st.text_input("From Date (YYYYMMDD)", max_chars=8, placeholder="20250705")
+    with col2:
+        thru_str = st.text_input("Thru Date (YYYYMMDD)", max_chars=8, placeholder="20260705")
+
+    # Wait until user types exactly 8 characters before processing
+    if len(from_str) == 8 and len(thru_str) == 8:
+        from_date = parse_date(from_str)
+        thru_date = parse_date(thru_str)
+
+        if not from_date or not thru_date:
+            st.error("Invalid date format. Please ensure dates are real days formatted as YYYYMMDD.")
+            st.stop()
+
+        if from_date > thru_date:
+            st.error("Error: 'From Date' cannot be after 'Thru Date'.")
+            st.stop()
+
+        total_calendar_days = (thru_date - from_date).days + 1
+        st.info(f"**Total Calendar Days in Period:** {total_calendar_days}")
 
         st.divider()
 
-        # --- 2. BASE RATING PERIOD (STRICT 8-DIGIT TEXT INPUT) ---
-        st.header("2. Base Rating Period")
-        st.caption("Enter dates strictly as 8 numbers (YYYYMMDD). No slashes required.")
+        # --- 3. NON-RATED TIME MODULE (TEXT COLUMN ENFORCED) ---
+        st.header("3. Non-Rated Periods")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            from_str = st.text_input("From Date (YYYYMMDD)", max_chars=8, placeholder="20250705")
-        with col2:
-            thru_str = st.text_input("Thru Date (YYYYMMDD)", max_chars=8, placeholder="20260705")
+        if 'nr_periods' not in st.session_state:
+            st.session_state.nr_periods = pd.DataFrame(columns=["Start (YYYYMMDD)", "End (YYYYMMDD)", "Code"])
 
-        # Wait until user types exactly 8 characters before processing
-        if len(from_str) == 8 and len(thru_str) == 8:
-            from_date = parse_date(from_str)
-            thru_date = parse_date(thru_str)
+        # Use TextColumn with regex to force exactly 8 numbers
+        edited_df = st.data_editor(
+            st.session_state.nr_periods,
+            column_config={
+                "Start (YYYYMMDD)": st.column_config.TextColumn(
+                    "Start Date", max_chars=8, validate="^\d{8}$", required=True
+                ),
+                "End (YYYYMMDD)": st.column_config.TextColumn(
+                    "End Date", max_chars=8, validate="^\d{8}$", required=True
+                ),
+                "Code": st.column_config.SelectboxColumn("Non-Rated Code", options=NON_RATED_CODES, required=True)
+            },
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True
+        )
 
-            if not from_date or not thru_date:
-                st.error("Invalid date format. Please ensure dates are real days formatted as YYYYMMDD.")
-                st.stop()
+        st.divider()
 
-            if from_date > thru_date:
-                st.error("Error: 'From Date' cannot be after 'Thru Date'.")
-                st.stop()
+        # --- 4. CALCULATION & GUARDRAILS ---
+        st.header("4. Evaluation Calculations")
 
-            total_calendar_days = (thru_date - from_date).days + 1
-            st.info(f"**Total Calendar Days in Period:** {total_calendar_days}")
+        total_nr_days = 0
+        valid_periods = []
+        has_errors = False
+        ipps_a_codes = []
 
-            st.divider()
+        for index, row in edited_df.iterrows():
+            raw_start = row["Start (YYYYMMDD)"]
+            raw_end = row["End (YYYYMMDD)"]
+            code = row["Code"]
 
-            # --- 3. NON-RATED TIME MODULE (TEXT COLUMN ENFORCED) ---
-            st.header("3. Non-Rated Periods")
-            
-            if 'nr_periods' not in st.session_state:
-                st.session_state.nr_periods = pd.DataFrame(columns=["Start (YYYYMMDD)", "End (YYYYMMDD)", "Code"])
+            if pd.isna(raw_start) or pd.isna(raw_end) or pd.isna(code):
+                continue 
 
-            # Use TextColumn with regex to force exactly 8 numbers
-            edited_df = st.data_editor(
-                st.session_state.nr_periods,
-                column_config={
-                    "Start (YYYYMMDD)": st.column_config.TextColumn(
-                        "Start Date", max_chars=8, validate="^\d{8}$", required=True
-                    ),
-                    "End (YYYYMMDD)": st.column_config.TextColumn(
-                        "End Date", max_chars=8, validate="^\d{8}$", required=True
-                    ),
-                    "Code": st.column_config.SelectboxColumn("Non-Rated Code", options=NON_RATED_CODES, required=True)
-                },
-                num_rows="dynamic",
-                use_container_width=True,
-                hide_index=True
-            )
+            start = parse_date(raw_start)
+            end = parse_date(raw_end)
 
-            st.divider()
-
-            # --- 4. CALCULATION & GUARDRAILS ---
-            st.header("4. Evaluation Calculations")
-
-            total_nr_days = 0
-            valid_periods = []
-            has_errors = False
-            ipps_a_codes = []
-
-            for index, row in edited_df.iterrows():
-                raw_start = row["Start (YYYYMMDD)"]
-                raw_end = row["End (YYYYMMDD)"]
-                code = row["Code"]
-
-                if pd.isna(raw_start) or pd.isna(raw_end) or pd.isna(code):
-                    continue 
-
-                start = parse_date(raw_start)
-                end = parse_date(raw_end)
-
-                if not start or not end:
-                    st.error(f"Row {index + 1}: Invalid date format. Use YYYYMMDD.")
-                    has_errors = True
-                    continue
-
-                if start > end:
-                    st.error(f"Row {index + 1}: Start Date must be before End Date.")
-                    has_errors = True
-                    continue
-
-                if start < from_date or end > thru_date:
-                    st.error(f"Row {index + 1}: Non-Rated dates must fall within the Base Rating Period.")
-                    has_errors = True
-                    continue
-
-                valid_periods.append({'start': start, 'end': end, 'code': code})
-                total_nr_days += (end - start).days + 1
-                
-                # Format for IPPS-A output block
-                letter_code = code.split(" - ")[0]
-                ipps_a_codes.append(f"{start.strftime('%Y%m%d')} - {end.strftime('%Y%m%d')}: {letter_code}")
-
-            if check_overlaps(valid_periods):
-                st.error("Error: Two or more Non-Rated periods overlap. Please correct the dates.")
+            if not start or not end:
+                st.error(f"Row {index + 1}: Invalid date format. Use YYYYMMDD.")
                 has_errors = True
+                continue
 
-            if has_errors:
-                st.stop()
+            if start > end:
+                st.error(f"Row {index + 1}: Start Date must be before End Date.")
+                has_errors = True
+                continue
 
-            total_rated_days = total_calendar_days - total_nr_days
-            rated_months = total_rated_days // 30
-            leftover_days = total_rated_days % 30
+            if start < from_date or end > thru_date:
+                st.error(f"Row {index + 1}: Non-Rated dates must fall within the Base Rating Period.")
+                has_errors = True
+                continue
 
-            # --- DA FORM OUTPUT ---
-            col3, col4, col5 = st.columns(3)
-            col3.metric("Total Rated Days", total_rated_days)
-            col4.metric("Rated Months", rated_months)
-            col5.metric("Leftover Days", leftover_days)
+            valid_periods.append({'start': start, 'end': end, 'code': code})
+            total_nr_days += (end - start).days + 1
+            
+            # Format for IPPS-A output block
+            letter_code = code.split(" - ")[0]
+            ipps_a_codes.append(f"{start.strftime('%Y%m%d')} - {end.strftime('%Y%m%d')}: {letter_code}")
 
-            st.success(f"**DA Form Output (Box 1i):** {rated_months} Months, {leftover_days} Days")
+        if check_overlaps(valid_periods):
+            st.error("Error: Two or more Non-Rated periods overlap. Please correct the dates.")
+            has_errors = True
 
-            # --- IPPS
+        if has_errors:
+            st.stop()
+
+        total_rated_days = total_calendar_days - total_nr_days
+        rated_months = total_rated_days // 30
+        leftover_days = total_rated_days % 30
+
+        # --- DA FORM OUTPUT ---
+        col3, col4, col5 = st.columns(3)
+        col3.metric("Total Rated Days", total_rated_days)
+        col4.metric("Rated Months", rated_months)
+        col5.metric("Leftover Days", leftover_days)
+
+        st.success(f"**DA Form Output (Box 1i):** {rated_months} Months, {leftover_days} Days")
+
+        # --- IPPS-A COPY/PASTE BLOCK ---
+        st.subheader("💻 IPPS-A Input Data")
+        ipps_a_text = "\n".join(ipps_a_codes) if ipps_a_codes else "No Non-Rated Time"
+        st.code(f"FROM: {from_date.strftime('%Y%m%d')}\nTHRU: {thru_date.strftime('%Y%m%d')}\n\nNON-RATED PERIODS:\n{ipps_a_text}", language="text")
+
+        # --- STRATEGY ENGINE & FORECASTER ---
+        if total_rated_days < min_days:
+            shortfall = min_days - total_rated_days
+            target_thru_date = thru_date + timedelta(days=shortfall)
+            
+            st.error(f"🚨 **RATING REQUIREMENT NOT MET**")
+            st.markdown(f"Currently at **{total_rated_days}** rated days (Minimum is **{min_days}** for {component}).")
+            st.info(f"💡 **STRATEGY:** To meet the minimum, you must extend the Thru Date to at least **{target_thru_date.strftime('%Y%m%d')}** (assuming no additional non-rated time).")
+        
+        # Board Forecaster check
+        if len(board_date_str) == 8:
+            board_date = parse_date(board_date_str)
+            if board_date:
+                if thru_date > board_date:
+                    st.warning(f"⚠️ **BOARD ALERT:** Your current Thru Date ({thru_date.strftime('%Y%m%d')}) closes AFTER the target board date ({board_date.strftime('%Y%m%d')}). This evaluation will miss the file cutoff.")
+                elif total_rated_days >= min_days:
+                    st.success(f"✅ Target achieved: The eval is valid and closes before the target board date.")
 
 if __name__ == "__main__":
     main()
