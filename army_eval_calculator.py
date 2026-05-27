@@ -5,7 +5,7 @@ import altair as alt
 import math
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Army HR Executive Dashboard v8.2", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Army Evaluation Dashboard", page_icon="🦅", layout="wide")
 
 # --- CONSTANTS & DICTIONARIES ---
 NON_RATED_CODES = [
@@ -80,7 +80,7 @@ if 'profile_ledger' in st.session_state and list(st.session_state.profile_ledger
 
 # --- MAIN APP ROUTING ---
 def main():
-    st.title("🦅 G-1 Executive Dashboard (v8.2)")
+    st.title("🦅 G-1 Executive Dashboard (v8.3)")
     
     with st.expander("📖 Quick Start Guide (Read Me First)"):
         st.markdown("""
@@ -115,19 +115,13 @@ def main():
         st.divider()
         st.header("2. Base Rating & Guardrails")
         
-        # The new "Airline Booking" Calendar Widget
-        date_range = st.date_input(
-            "📅 Select Rating Period (Click Start Date, then click End Date)",
-            value=(), # Empty tuple to force user to pick
-            format="YYYY/MM/DD"
-        )
+        date_range = st.date_input("📅 Select Rating Period (Click Start Date, then click End Date)", value=(), format="YYYY/MM/DD")
         
         st.caption("Advanced Guardrails (Optional - Leave blank if unsure)")
         col3, col4 = st.columns(2)
         with col3: prev_thru_str = st.text_input("Prior Eval Thru (Optional YYYYMMDD)", max_chars=8)
         with col4: rater_sig_str = st.text_input("Rater Sig Date (Optional YYYYMMDD)", max_chars=8)
 
-        # Wait until the user has clicked BOTH dates on the calendar
         if len(date_range) != 2:
             st.info("👆 Please select both a **From Date** and a **Thru Date** on the calendar above to continue.")
             st.stop()
@@ -137,7 +131,6 @@ def main():
         if from_date > thru_date:
             st.error("Error: 'From Date' cannot be after 'Thru Date'."); st.stop()
 
-        # Gap Check
         if len(prev_thru_str) == 8:
             prev_date = parse_date(prev_thru_str)
             if prev_date:
@@ -147,7 +140,6 @@ def main():
                 else:
                     st.success("✅ Gap Check Passed.")
 
-        # Sig Check
         if len(rater_sig_str) == 8:
             r_date = parse_date(rater_sig_str)
             if r_date and r_date < thru_date: st.warning("⚠️ **WARNING:** Rater signing before Thru Date.")
@@ -155,8 +147,31 @@ def main():
         total_calendar_days = (thru_date - from_date).days + 1
         st.divider()
 
+        # --- THE NEW INTAKE FORM FOR NON-RATED TIME ---
         st.header("3. Non-Rated Time (Optional - Skip if none)")
         if 'nr_periods' not in st.session_state: st.session_state.nr_periods = pd.DataFrame(columns=EXPECTED_NR_COLS)
+        
+        st.subheader("Add a Non-Rated Period")
+        nr_col1, nr_col2, nr_col3 = st.columns([2, 2, 1])
+        with nr_col1:
+            nr_dates = st.date_input("Select Non-Rated Range", value=(), format="YYYY/MM/DD", key="nr_date_picker")
+        with nr_col2:
+            nr_code = st.selectbox("Select Non-Rated Code", options=NON_RATED_CODES, key="nr_code_picker")
+        with nr_col3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("➕ Add Period", use_container_width=True):
+                if len(nr_dates) == 2:
+                    new_row = pd.DataFrame([{
+                        "Start (YYYYMMDD)": nr_dates[0].strftime("%Y%m%d"),
+                        "End (YYYYMMDD)": nr_dates[1].strftime("%Y%m%d"),
+                        "Code": nr_code
+                    }])
+                    st.session_state.nr_periods = pd.concat([st.session_state.nr_periods, new_row], ignore_index=True)
+                    st.rerun()
+                else:
+                    st.warning("Select Start AND End dates.")
+
+        st.caption("Active Non-Rated Periods (You can delete rows or type to edit below)")
         edited_df = st.data_editor(
             st.session_state.nr_periods,
             column_config={
@@ -165,6 +180,9 @@ def main():
                 "Code": st.column_config.SelectboxColumn("Code", options=NON_RATED_CODES)
             }, num_rows="dynamic", use_container_width=True, hide_index=True
         )
+        
+        # Save edits back to session state so deletions work
+        st.session_state.nr_periods = edited_df
 
         total_nr_days, valid_periods, ipps_a_codes = 0, [], []
         for _, row in edited_df.iterrows():
@@ -195,7 +213,6 @@ def main():
         if total_rated_days < min_days:
             st.error(f"🛑 **INVALID:** Short {min_days - total_rated_days} days (Min is {min_days}).")
         
-        # IPPS-A Output Block instantly strips the slashes back out to format as YYYYMMDD
         st.code(f"FROM: {from_date.strftime('%Y%m%d')}\nTHRU: {thru_date.strftime('%Y%m%d')}\n\nNON-RATED:\n{chr(10).join(ipps_a_codes) if ipps_a_codes else 'No Non-Rated Time'}")
 
     # ==========================================
