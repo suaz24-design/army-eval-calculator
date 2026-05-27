@@ -5,7 +5,7 @@ import altair as alt
 import math
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Army HR Executive Dashboard v8.0", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Army HR Executive Dashboard v8.2", page_icon="🦅", layout="wide")
 
 # --- CONSTANTS & DICTIONARIES ---
 NON_RATED_CODES = [
@@ -18,7 +18,7 @@ NON_RATED_CODES = [
 EVAL_TYPES = ["Annual", "Change of Rater", "Change of Duty", "Extended Annual", "Relief for Cause", "Complete the Record", "Academic"]
 RANK_GROUPS = ["OER (< 50% Limit)", "NCOER (< 24% Limit)"]
 
-# AR 623-3 Flagged Terms (Non-exhaustive but catches common errors)
+# AR 623-3 Flagged Terms
 FLAGGED_TERMS = [
     "pregnancy", "pregnant", "medical", "profile", "article 15", "court martial", "court-martial", 
     "religion", "race", "gender", "sexual orientation", "sharp", "eo complaint", "sympathy", 
@@ -80,15 +80,24 @@ if 'profile_ledger' in st.session_state and list(st.session_state.profile_ledger
 
 # --- MAIN APP ROUTING ---
 def main():
-    st.title("🦅 G-1 Executive Dashboard (v8.0)")
-    st.markdown("Automated IPPS-A dates, Profile Ledgers, Policy Scanners, and Career Crosswalks.")
+    st.title("🦅 G-1 Executive Dashboard (v8.2)")
+    
+    with st.expander("📖 Quick Start Guide (Read Me First)"):
+        st.markdown("""
+        **For 90% of evaluations, you ONLY need Tab 1.**
+        1. Select your Component and Eval Type.
+        2. Click the Date Box and select your **From** and **Thru** dates on the calendar.
+        3. *Done.* Scroll down for your exact IPPS-A output.
+        
+        *Everything labeled "(Optional)" and all other tabs are advanced power-tools for the S1/G1 staff. Skip them if you don't need them.*
+        """)
 
     tabs = st.tabs([
         "📅 Eval Calculator", 
-        "📋 Command Profile Ledger", 
-        "📝 Policy & Text Scanner", 
-        "🧮 MQ Sequencer", 
-        "🔎 Career Crosswalk"
+        "📋 Profile Ledger [S1]", 
+        "📝 Text Scanner [Advanced]", 
+        "🧮 MQ Sequencer [Advanced]", 
+        "🔎 Crosswalk [Advanced]"
     ])
 
     # ==========================================
@@ -105,75 +114,89 @@ def main():
         
         st.divider()
         st.header("2. Base Rating & Guardrails")
-        col1, col2, col3, col4 = st.columns(4)
-        with col1: from_str = st.text_input("From Date", max_chars=8, placeholder="20250705")
-        with col2: thru_str = st.text_input("Thru Date", max_chars=8, placeholder="20260705")
-        with col3: prev_thru_str = st.text_input("Prior Eval Thru (Gap Check)", max_chars=8)
-        with col4: rater_sig_str = st.text_input("Rater Sig Date", max_chars=8)
+        
+        # The new "Airline Booking" Calendar Widget
+        date_range = st.date_input(
+            "📅 Select Rating Period (Click Start Date, then click End Date)",
+            value=(), # Empty tuple to force user to pick
+            format="YYYY/MM/DD"
+        )
+        
+        st.caption("Advanced Guardrails (Optional - Leave blank if unsure)")
+        col3, col4 = st.columns(2)
+        with col3: prev_thru_str = st.text_input("Prior Eval Thru (Optional YYYYMMDD)", max_chars=8)
+        with col4: rater_sig_str = st.text_input("Rater Sig Date (Optional YYYYMMDD)", max_chars=8)
 
-        if len(from_str) == 8 and len(thru_str) == 8:
-            from_date, thru_date = parse_date(from_str), parse_date(thru_str)
-            if not from_date or not thru_date or from_date > thru_date:
-                st.error("Invalid dates detected."); st.stop()
-
-            # Gap Check
-            if len(prev_thru_str) == 8:
-                prev_date = parse_date(prev_thru_str)
-                if prev_date:
-                    expected_from = prev_date + timedelta(days=1)
-                    if from_date != expected_from:
-                        st.error(f"⚠️ **GAP/OVERLAP:** Prior eval ended {prev_date.strftime('%Y%m%d')}. This MUST start {expected_from.strftime('%Y%m%d')}.")
-                    else:
-                        st.success("✅ Gap Check Passed.")
-
-            # Sig Check
-            if len(rater_sig_str) == 8:
-                r_date = parse_date(rater_sig_str)
-                if r_date and r_date < thru_date: st.warning("⚠️ **WARNING:** Rater signing before Thru Date.")
-
-            total_calendar_days = (thru_date - from_date).days + 1
-            st.divider()
-
-            st.header("3. Non-Rated Time")
-            if 'nr_periods' not in st.session_state: st.session_state.nr_periods = pd.DataFrame(columns=EXPECTED_NR_COLS)
-            edited_df = st.data_editor(
-                st.session_state.nr_periods,
-                column_config={
-                    "Start (YYYYMMDD)": st.column_config.TextColumn("Start", max_chars=8, validate=r"^\d{8}$"),
-                    "End (YYYYMMDD)": st.column_config.TextColumn("End", max_chars=8, validate=r"^\d{8}$"),
-                    "Code": st.column_config.SelectboxColumn("Code", options=NON_RATED_CODES)
-                }, num_rows="dynamic", use_container_width=True, hide_index=True
-            )
-
-            total_nr_days, valid_periods, ipps_a_codes = 0, [], []
-            for _, row in edited_df.iterrows():
-                raw_start, raw_end, code = row["Start (YYYYMMDD)"], row["End (YYYYMMDD)"], row["Code"]
-                if pd.isna(raw_start) or pd.isna(raw_end) or pd.isna(code): continue 
-                start, end = parse_date(raw_start), parse_date(raw_end)
-                if start and end and start <= end and start >= from_date and end <= thru_date:
-                    valid_periods.append({'start': start, 'end': end, 'code': code})
-                    total_nr_days += (end - start).days + 1
-                    ipps_a_codes.append(f"{start.strftime('%Y%m%d')} - {end.strftime('%Y%m%d')}: {code.split(' - ')[0]}")
+        # Wait until the user has clicked BOTH dates on the calendar
+        if len(date_range) != 2:
+            st.info("👆 Please select both a **From Date** and a **Thru Date** on the calendar above to continue.")
+            st.stop()
             
-            total_rated_days = total_calendar_days - total_nr_days
-            rated_months, leftover_days = total_rated_days // 30, total_rated_days % 30
+        from_date, thru_date = date_range[0], date_range[1]
 
-            st.header("4. Output & Visualizer")
-            suspense_date = thru_date + timedelta(days=90)
-            today = datetime.today().date()
-            if today > suspense_date: st.error(f"🚨 **DELINQUENT:** {(today - suspense_date).days} days LATE to HRC.")
-            else: st.success(f"📅 **HRC Suspense Date:** {suspense_date.strftime('%Y-%m-%d')}")
+        if from_date > thru_date:
+            st.error("Error: 'From Date' cannot be after 'Thru Date'."); st.stop()
 
-            st.altair_chart(plot_timeline(from_date, thru_date, valid_periods), use_container_width=True)
+        # Gap Check
+        if len(prev_thru_str) == 8:
+            prev_date = parse_date(prev_thru_str)
+            if prev_date:
+                expected_from = prev_date + timedelta(days=1)
+                if from_date != expected_from:
+                    st.error(f"⚠️ **GAP/OVERLAP:** Prior eval ended {prev_date.strftime('%Y%m%d')}. This MUST start {expected_from.strftime('%Y%m%d')}.")
+                else:
+                    st.success("✅ Gap Check Passed.")
 
-            colA, colB, colC = st.columns(3)
-            colA.metric("Box 1i: Rated Months", rated_months)
-            colB.metric("Box 1i: Rated Days", leftover_days)
-            colC.metric("Total Rated Days", total_rated_days)
+        # Sig Check
+        if len(rater_sig_str) == 8:
+            r_date = parse_date(rater_sig_str)
+            if r_date and r_date < thru_date: st.warning("⚠️ **WARNING:** Rater signing before Thru Date.")
 
-            if total_rated_days < min_days:
-                st.error(f"🛑 **INVALID:** Short {min_days - total_rated_days} days (Min is {min_days}).")
-            st.code(f"FROM: {from_date.strftime('%Y%m%d')}\nTHRU: {thru_date.strftime('%Y%m%d')}\n\nNON-RATED:\n{chr(10).join(ipps_a_codes) if ipps_a_codes else 'No Non-Rated Time'}")
+        total_calendar_days = (thru_date - from_date).days + 1
+        st.divider()
+
+        st.header("3. Non-Rated Time (Optional - Skip if none)")
+        if 'nr_periods' not in st.session_state: st.session_state.nr_periods = pd.DataFrame(columns=EXPECTED_NR_COLS)
+        edited_df = st.data_editor(
+            st.session_state.nr_periods,
+            column_config={
+                "Start (YYYYMMDD)": st.column_config.TextColumn("Start", max_chars=8, validate=r"^\d{8}$"),
+                "End (YYYYMMDD)": st.column_config.TextColumn("End", max_chars=8, validate=r"^\d{8}$"),
+                "Code": st.column_config.SelectboxColumn("Code", options=NON_RATED_CODES)
+            }, num_rows="dynamic", use_container_width=True, hide_index=True
+        )
+
+        total_nr_days, valid_periods, ipps_a_codes = 0, [], []
+        for _, row in edited_df.iterrows():
+            raw_start, raw_end, code = row["Start (YYYYMMDD)"], row["End (YYYYMMDD)"], row["Code"]
+            if pd.isna(raw_start) or pd.isna(raw_end) or pd.isna(code): continue 
+            start, end = parse_date(raw_start), parse_date(raw_end)
+            if start and end and start <= end and start >= from_date and end <= thru_date:
+                valid_periods.append({'start': start, 'end': end, 'code': code})
+                total_nr_days += (end - start).days + 1
+                ipps_a_codes.append(f"{start.strftime('%Y%m%d')} - {end.strftime('%Y%m%d')}: {code.split(' - ')[0]}")
+        
+        total_rated_days = total_calendar_days - total_nr_days
+        rated_months, leftover_days = total_rated_days // 30, total_rated_days % 30
+
+        st.header("4. Output & Visualizer")
+        suspense_date = thru_date + timedelta(days=90)
+        today = datetime.today().date()
+        if today > suspense_date: st.error(f"🚨 **DELINQUENT:** {(today - suspense_date).days} days LATE to HRC.")
+        else: st.success(f"📅 **HRC Suspense Date:** {suspense_date.strftime('%Y-%m-%d')}")
+
+        st.altair_chart(plot_timeline(from_date, thru_date, valid_periods), use_container_width=True)
+
+        colA, colB, colC = st.columns(3)
+        colA.metric("Box 1i: Rated Months", rated_months)
+        colB.metric("Box 1i: Rated Days", leftover_days)
+        colC.metric("Total Rated Days", total_rated_days)
+
+        if total_rated_days < min_days:
+            st.error(f"🛑 **INVALID:** Short {min_days - total_rated_days} days (Min is {min_days}).")
+        
+        # IPPS-A Output Block instantly strips the slashes back out to format as YYYYMMDD
+        st.code(f"FROM: {from_date.strftime('%Y%m%d')}\nTHRU: {thru_date.strftime('%Y%m%d')}\n\nNON-RATED:\n{chr(10).join(ipps_a_codes) if ipps_a_codes else 'No Non-Rated Time'}")
 
     # ==========================================
     # TAB 2: COMMAND PROFILE LEDGER
@@ -254,19 +277,16 @@ def main():
         planned_hqs = st.number_input("How many HQs/Others are you giving?", min_value=0, value=2)
         
         if st.button("Generate Optimal Signing Sequence"):
-            # Greedy Algorithm: Always sign HQs first to build the denominator, then MQs.
             sim_total, sim_mqs = s_total, s_mqs
             limit = 0.499 if "OER" in seq_rule else 0.239
             
             sequence_log = []
             misfire = False
             
-            # Step 1: Process HQs
             for i in range(planned_hqs):
                 sim_total += 1
                 sequence_log.append(f"**Step {len(sequence_log)+1}:** Sign an HQ (Profile: {(sim_mqs/sim_total)*100:.1f}%)")
                 
-            # Step 2: Try to process MQs
             for i in range(planned_mqs):
                 if ((sim_mqs + 1) / (sim_total + 1)) <= limit:
                     sim_total += 1
@@ -319,10 +339,8 @@ def main():
                     
                     chart_data.append({"Eval": f"Eval {i+1} ({audit_records[i]['Type']})", "Start": pd.to_datetime(audit_records[i]["From"]), "End": pd.to_datetime(audit_records[i]["Thru"])})
                 
-                # Add the last one to chart
                 chart_data.append({"Eval": f"Eval {len(audit_records)} ({audit_records[-1]['Type']})", "Start": pd.to_datetime(audit_records[-1]["From"]), "End": pd.to_datetime(audit_records[-1]["Thru"])})
                 
-                # Plot the timeline
                 st.altair_chart(alt.Chart(pd.DataFrame(chart_data)).mark_bar().encode(
                     x=alt.X('Start', title='Date'), x2='End', y='Eval', color=alt.value('#1976D2'), tooltip=['Eval', 'Start', 'End']
                 ).properties(height=250).interactive(), use_container_width=True)
