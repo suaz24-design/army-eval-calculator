@@ -1,25 +1,22 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
+from datetime import date, timedelta
+import io
 
-# Set page configuration for the Streamlit app
-st.set_page_config(page_title="Army Eval Date Calculator", page_icon="🇺🇸", layout="centered")
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="Army Eval Date Calculator v2.0", page_icon="🎖️", layout="wide")
 
-# DA PAM 623-3 Standard Non-Rated Codes
+# --- DATA DICTIONARIES ---
 NON_RATED_CODES = [
-    "A - AWOL", 
-    "C - Confinement", 
-    "D - Dropped from rolls", 
-    "E - Leave (30+ days)", 
-    "F - Under arrest", 
-    "I - In transit", 
-    "M - Missing in Action", 
-    "P - Patient", 
-    "Q - Lack of rater qualification", 
-    "R - Retirement/Resignation leave", 
-    "S - Student", 
-    "T - TDY", 
-    "W - Prisoner of War"
+    "A - AWOL", "C - Confinement", "D - Dropped from rolls", 
+    "E - Leave (30+ days)", "F - Under arrest", "I - In transit", 
+    "M - Missing in Action", "P - Patient", "Q - Lack of rater qualification", 
+    "R - Retirement/Resignation leave", "S - Student", "T - TDY", "W - Prisoner of War"
+]
+
+EVAL_TYPES = [
+    "Annual", "Change of Rater", "Change of Duty", 
+    "Extended Annual", "Relief for Cause", "Complete the Record"
 ]
 
 def check_overlaps(periods):
@@ -32,14 +29,70 @@ def check_overlaps(periods):
             return True
     return False
 
-def main():
-    st.title("🎖️ Army Evaluation Date Calculator")
-    st.markdown("Automates date math for OERs (DA Form 67-11) and NCOERs (DA Form 2166-9) IAW AR/DA PAM 623-3.")
+def generate_export_text(from_d, thru_d, comp, eval_t, cal_days, nr_days, r_days, r_months, leftover, codes):
+    """Generates a clean text summary for export."""
+    lines = [
+        "ARMY EVALUATION REPORT - DATE CALCULATION SUMMARY",
+        "="*50,
+        f"Component: {comp}",
+        f"Evaluation Type: {eval_t}",
+        f"Period: {from_d.strftime('%Y%m%d')} thru {thru_d.strftime('%Y%m%d')}",
+        "-"*50,
+        f"Total Calendar Days: {cal_days}",
+        f"Total Non-Rated Days: {nr_days}",
+        f"Total Rated Days: {r_days}",
+        "-"*50,
+        "DA FORM OUTPUT (Box 1i):",
+        f"Rated Months: {r_months}",
+        f"Rated Days: {leftover}",
+        f"Non-Rated Codes Used: {codes}",
+        "="*50,
+        "Calculated in accordance with AR/DA PAM 623-3."
+    ]
+    return "\n".join(lines)
 
+def main():
+    st.title("🎖️ Army Evaluation Date Calculator v2.0")
+    st.markdown("Automates date math and enforces rating minimums IAW AR/DA PAM 623-3.")
+
+    # --- SIDEBAR: CODE GLOSSARY ---
+    with st.sidebar:
+        st.header("📚 Non-Rated Code Glossary")
+        st.markdown("""
+        * **A (AWOL):** Absent without leave.
+        * **C (Confinement):** Military or civilian confinement.
+        * **E (Leave):** Authorized leave of 30 or more consecutive days.
+        * **I (In Transit):** Travel time between duty stations (PCS).
+        * **P (Patient):** Hospitalization (including convalescent leave).
+        * **Q (Rater Qual):** Rater lacks minimum time (e.g., rater leaves before 90/120 days).
+        * **S (Student):** Attending military/civilian school full-time.
+        * **T (TDY):** Temporary duty away from the rated position (less than 90 days usually requires rater to keep rating, but over 90 days or specific TDY uses this code).
+        """)
+        st.divider()
+        st.info("Tip: Always verify specific code application in DA PAM 623-3, Table 3-1.")
+
+    # --- 1. EVALUATION PARAMETERS ---
+    st.header("1. Evaluation Parameters")
+    col_comp, col_eval = st.columns(2)
+    with col_comp:
+        component = st.selectbox("Army Component", options=["Active Duty", "USAR / ARNG"])
+    with col_eval:
+        eval_type = st.selectbox("Type of Evaluation", options=EVAL_TYPES)
+
+    # Determine Minimum Rated Days Based on Component and Eval Type
+    min_days = 90 if component == "Active Duty" else 120
+    
+    # Exceptions to the rule
+    if eval_type == "Relief for Cause":
+        min_days = 0 # No minimum
+    elif eval_type == "Extended Annual":
+        pass # Still requires the base minimums to be met, but period is > 365 calendar days
+
+    st.caption(f"**Required Minimum Rated Time:** {min_days} days (Based on {component} - {eval_type})")
     st.divider()
 
-    # --- 1. BASE RATING PERIOD ---
-    st.header("1. Base Rating Period")
+    # --- 2. BASE RATING PERIOD ---
+    st.header("2. Base Rating Period")
     col1, col2 = st.columns(2)
     with col1:
         from_date = st.date_input("From Date (YYYYMMDD)", format="YYYY/MM/DD")
@@ -50,21 +103,20 @@ def main():
         st.error("Error: 'From Date' cannot be after 'Thru Date'.")
         st.stop()
 
-    # Calculate Total Calendar Days (Inclusive of start and end date per DA PAM 623-3)
     total_calendar_days = (thru_date - from_date).days + 1
     st.info(f"**Total Calendar Days in Period:** {total_calendar_days}")
+    
+    if eval_type == "Extended Annual" and total_calendar_days <= 365:
+         st.warning("⚠️ Extended Annual reports typically cover a calendar period greater than 365 days.")
 
     st.divider()
 
-    # --- 2. NON-RATED TIME MODULE ---
-    st.header("2. Non-Rated Periods")
-    st.markdown("Add any non-rated periods below. The system will automatically compute the days.")
-
-    # Initialize session state for non-rated periods
+    # --- 3. NON-RATED TIME MODULE ---
+    st.header("3. Non-Rated Periods")
+    
     if 'nr_periods' not in st.session_state:
         st.session_state.nr_periods = pd.DataFrame(columns=["Start Date", "End Date", "Code"])
 
-   # Use Streamlit's dynamic data editor
     edited_df = st.data_editor(
         st.session_state.nr_periods,
         column_config={
@@ -79,63 +131,49 @@ def main():
 
     st.divider()
 
-    # --- 3. CALCULATION ENGINE & VALIDATION ---
-    st.header("3. Evaluation Calculations")
+    # --- 4. CALCULATION & GUARDRAILS ---
+    st.header("4. Evaluation Calculations")
 
     total_nr_days = 0
     valid_periods = []
     has_errors = False
 
-    # Process each row from the data editor
     for index, row in edited_df.iterrows():
         raw_start = row["Start Date"]
         raw_end = row["End Date"]
         code = row["Code"]
 
         if pd.isna(raw_start) or pd.isna(raw_end) or pd.isna(code):
-            continue # Skip incomplete rows
+            continue 
 
-        # --- THE BUG FIX IS HERE ---
-        # Force whatever format the table spits out back into a standard Python date object
         start = pd.to_datetime(raw_start).date()
         end = pd.to_datetime(raw_end).date()
 
-        # Validation A: Start must be before End
         if start > end:
             st.error(f"Error in Period {index + 1}: Start Date must be before End Date.")
             has_errors = True
             continue
 
-        # Validation B: Period must fall within the From/Thru dates
         if start < from_date or end > thru_date:
-            st.error(f"Error in Period {index + 1}: Non-Rated dates must fall within the Base Rating Period ({from_date} to {thru_date}).")
+            st.error(f"Error in Period {index + 1}: Non-Rated dates must fall within the Base Rating Period.")
             has_errors = True
             continue
 
         valid_periods.append({'start': start, 'end': end, 'code': code})
-        # Calculate days for this period (inclusive)
         total_nr_days += (end - start).days + 1
 
-    # Validation C: Overlap check
     if check_overlaps(valid_periods):
         st.error("Error: Two or more Non-Rated periods overlap. Please correct the dates.")
         has_errors = True
 
-    # Stop calculations if there are errors in the inputs
     if has_errors:
-        st.warning("Please resolve the errors above to view the final calculations.")
         st.stop()
 
-    # The Math IAW DA PAM 623-3
     total_rated_days = total_calendar_days - total_nr_days
     rated_months = total_rated_days // 30
     leftover_days = total_rated_days % 30
 
-    # Validation D: Minimum 90-day warning
-    if total_rated_days < 90:
-        st.warning(f"⚠️ **Warning:** Total rated time is {total_rated_days} days. Annual evaluations require a minimum of 90 rated days unless covered by a specific exception (e.g., Change of Rater, Relief for Cause).")
-
-    # --- 4. OUTPUT GENERATION ---
+    # --- OUTPUT GENERATION ---
     col3, col4, col5 = st.columns(3)
     col3.metric("Total Rated Days", total_rated_days)
     col4.metric("Rated Months", rated_months)
@@ -143,18 +181,43 @@ def main():
 
     st.success(f"**DA Form Output (Box 1i):** {rated_months} Months, {leftover_days} Days")
 
-    # Generate Chronological Code String for Admin Data
+    # Chronological Code String
+    code_string = "None"
     if valid_periods:
         sorted_periods = sorted(valid_periods, key=lambda x: x['start'])
-        codes_used = []
-        for p in sorted_periods:
-            letter_code = p['code'].split(" - ")[0]
-            codes_used.append(letter_code)
-        
+        codes_used = [p['code'].split(" - ")[0] for p in sorted_periods]
         code_string = ", ".join(codes_used)
         st.info(f"**Non-Rated Codes used (Chronological):** {code_string}")
     else:
         st.info("**Non-Rated Codes used:** None")
+
+    # --- STRATEGY ENGINE & GUARDRAILS ---
+    if total_rated_days < min_days:
+        shortfall = min_days - total_rated_days
+        target_thru_date = thru_date + timedelta(days=shortfall)
+        
+        st.error(f"🚨 **RATING REQUIREMENT NOT MET**")
+        st.markdown(f"""
+        This {component} {eval_type} evaluation requires **{min_days} rated days**, but currently only has **{total_rated_days}**. 
+        
+        **Strategy to fix:**
+        1. **Extend the Period:** If possible, extend the 'Thru Date' by {shortfall} days to **{target_thru_date.strftime('%Y/%m/%d')}**.
+        2. **Check Non-Rated Time:** Verify if any non-rated time (like a school or TDY) was actually performed in the rated duty position and shouldn't be deducted.
+        3. **Change Eval Type:** If the rater is leaving, this cannot be a Change of Rater. It will likely require an Extended Annual at a later date, or a 'Q - Lack of rater qualification' non-rated period for the next evaluator.
+        """)
+    elif total_rated_days >= min_days and min_days > 0:
+        st.success(f"✅ Minimum rating requirements met for {component} {eval_type}.")
+
+    # --- EXPORT FEATURE ---
+    st.divider()
+    export_str = generate_export_text(from_date, thru_date, component, eval_type, total_calendar_days, total_nr_days, total_rated_days, rated_months, leftover_days, code_string)
+    
+    st.download_button(
+        label="📄 Download Calculation Summary (TXT)",
+        data=export_str,
+        file_name=f"Eval_Calc_{thru_date.strftime('%Y%m%d')}.txt",
+        mime="text/plain"
+    )
 
 if __name__ == "__main__":
     main()
