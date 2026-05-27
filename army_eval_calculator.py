@@ -2,9 +2,10 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import altair as alt
+import math
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Army Eval Planner v4.0", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Army Eval Planner v5.0", page_icon="🦅", layout="wide")
 
 # --- DATA DICTIONARIES ---
 NON_RATED_CODES = [
@@ -19,9 +20,10 @@ EVAL_TYPES = [
     "Extended Annual", "Relief for Cause", "Complete the Record"
 ]
 
+RANK_GROUPS = ["OER (< 50% Limit)", "NCOER (< 24% Limit)"]
+
 # --- HELPER FUNCTIONS ---
 def parse_date(date_str):
-    """Converts an 8-digit string into a Python date object."""
     try:
         return datetime.strptime(str(date_str).strip(), "%Y%m%d").date()
     except ValueError:
@@ -35,23 +37,11 @@ def check_overlaps(periods):
     return False
 
 def plot_timeline(from_date, thru_date, valid_periods):
-    """Generates a visual Gantt chart of the rating period."""
-    # Create base period data
     chart_data = [{"Task": "Base Rating Period", "Start": pd.to_datetime(from_date), "End": pd.to_datetime(thru_date), "Type": "Rated Time"}]
-    
-    # Add non-rated periods
     for p in valid_periods:
         code_letter = p['code'].split(" - ")[0]
-        chart_data.append({
-            "Task": f"Non-Rated ({code_letter})", 
-            "Start": pd.to_datetime(p['start']), 
-            "End": pd.to_datetime(p['end']), 
-            "Type": "Non-Rated Time"
-        })
-        
+        chart_data.append({"Task": f"Non-Rated ({code_letter})", "Start": pd.to_datetime(p['start']), "End": pd.to_datetime(p['end']), "Type": "Non-Rated Time"})
     df_chart = pd.DataFrame(chart_data)
-    
-    # Altair Gantt Chart
     chart = alt.Chart(df_chart).mark_bar(size=30).encode(
         x=alt.X('Start', title='Date', axis=alt.Axis(format='%Y-%m-%d', labelAngle=-45)),
         x2='End',
@@ -59,18 +49,42 @@ def plot_timeline(from_date, thru_date, valid_periods):
         color=alt.Color('Type', scale=alt.Scale(domain=['Rated Time', 'Non-Rated Time'], range=['#2e7d32', '#d32f2f']), legend=None),
         tooltip=['Task', 'Start', 'End']
     ).properties(height=200).interactive()
-    
     return chart
+
+def calculate_profile_health(total, mqs, limit_type):
+    """Calculates profile health and future requirements."""
+    limit = 0.499 if limit_type == "OER (< 50% Limit)" else 0.239
+    
+    if total == 0:
+        return 0.0, "Clear for 1st MQ", 0
+        
+    current_pct = mqs / total
+    
+    # Simulate giving an MQ right now
+    projected_pct = (mqs + 1) / (total + 1)
+    
+    if projected_pct <= limit:
+        # Calculate how many total MQs they could give right now
+        available = 0
+        while ((mqs + available + 1) / (total + available + 1)) <= limit:
+            available += 1
+        return current_pct, f"Clear (Can give {available} MQ{'s' if available > 1 else ''})", 0
+    else:
+        # Calculate how many HQs needed to unlock the next MQ
+        # (mqs + 1) / (total + 1 + HQs_needed) <= limit
+        # hqs_needed >= ((mqs + 1) / limit) - total - 1
+        hqs_needed = math.ceil(((mqs + 1) / limit) - total - 1)
+        return current_pct, f"Misfire Risk (Need {hqs_needed} HQ{'s' if hqs_needed > 1 else ''} first)", hqs_needed
 
 # --- MAIN APP ---
 def main():
-    st.title("🦅 Army Evaluation Planner & Kiosk")
-    st.markdown("Strictly automated IPPS-A date math and Senior Rater profile tracking.")
+    st.title("🦅 Army Evaluation Planner & Kiosk v5.0")
+    st.markdown("Strictly automated IPPS-A date math and Command Profile Ledger.")
 
-    tab1, tab2 = st.tabs(["📅 Dates & IPPS-A Output", "📊 Senior Rater Profile Check"])
+    tab1, tab2 = st.tabs(["📅 Dates & IPPS-A Output", "📋 Command Profile Ledger"])
 
     # ==========================================
-    # TAB 1: DATE CALCULATOR & VISUALIZER
+    # TAB 1: DATE CALCULATOR (Remains Unchanged)
     # ==========================================
     with tab1:
         st.header("1. Evaluation Parameters")
@@ -106,10 +120,9 @@ def main():
                 st.stop()
 
             total_calendar_days = (thru_date - from_date).days + 1
-            
             st.divider()
 
-            st.header("3. Add Non-Rated Time (If Applicable)")
+            st.header("3. Add Non-Rated Time")
             if 'nr_periods' not in st.session_state:
                 st.session_state.nr_periods = pd.DataFrame(columns=["Start (YYYYMMDD)", "End (YYYYMMDD)", "Code"])
 
@@ -122,19 +135,13 @@ def main():
                 },
                 num_rows="dynamic", use_container_width=True, hide_index=True
             )
-
             st.divider()
 
             # --- CALCULATIONS ---
-            total_nr_days = 0
-            valid_periods = []
-            has_errors = False
-            ipps_a_codes = []
-
+            total_nr_days, valid_periods, has_errors, ipps_a_codes = 0, [], False, []
             for index, row in edited_df.iterrows():
                 raw_start, raw_end, code = row["Start (YYYYMMDD)"], row["End (YYYYMMDD)"], row["Code"]
                 if pd.isna(raw_start) or pd.isna(raw_end) or pd.isna(code): continue 
-
                 start, end = parse_date(raw_start), parse_date(raw_end)
                 if not start or not end:
                     st.error(f"Row {index + 1}: Invalid date."); has_errors = True; continue
@@ -142,23 +149,18 @@ def main():
                     st.error(f"Row {index + 1}: Start must be before End."); has_errors = True; continue
                 if start < from_date or end > thru_date:
                     st.error(f"Row {index + 1}: Dates must be within Base Period."); has_errors = True; continue
-
                 valid_periods.append({'start': start, 'end': end, 'code': code})
                 total_nr_days += (end - start).days + 1
                 ipps_a_codes.append(f"{start.strftime('%Y%m%d')} - {end.strftime('%Y%m%d')}: {code.split(' - ')[0]}")
 
             if check_overlaps(valid_periods):
                 st.error("Error: Overlapping non-rated periods detected."); has_errors = True
-
             if has_errors: st.stop()
 
             total_rated_days = total_calendar_days - total_nr_days
             rated_months, leftover_days = total_rated_days // 30, total_rated_days % 30
 
-            # --- VISUAL DASHBOARD ---
             st.header("4. Final IPPS-A Output & Visualizer")
-            
-            # The Gantt Chart
             st.altair_chart(plot_timeline(from_date, thru_date, valid_periods), use_container_width=True)
 
             colA, colB, colC = st.columns(3)
@@ -166,55 +168,80 @@ def main():
             colB.metric("Box 1i: Rated Days", leftover_days)
             colC.metric("Total Rated Days", total_rated_days)
 
-            # --- STOPLIGHT GUARDRAILS ---
             if total_rated_days < min_days:
                 shortfall = min_days - total_rated_days
                 target_thru_date = thru_date + timedelta(days=shortfall)
                 st.error(f"🛑 **INVALID EVALUATION:** You are short **{shortfall} days** (Minimum required is {min_days}).")
-                st.info(f"💡 **FIX:** To meet the 90/120 day minimum, change the Thru Date to **{target_thru_date.strftime('%Y%m%d')}**.")
+                st.info(f"💡 **FIX:** To meet the minimum, change the Thru Date to **{target_thru_date.strftime('%Y%m%d')}**.")
             else:
                 st.success(f"✅ **VALID EVALUATION:** Minimum rating requirements met.")
 
             st.code(f"FROM: {from_date.strftime('%Y%m%d')}\nTHRU: {thru_date.strftime('%Y%m%d')}\n\nNON-RATED:\n{chr(10).join(ipps_a_codes) if ipps_a_codes else 'None'}", language="text")
 
     # ==========================================
-    # TAB 2: SENIOR RATER PROFILE CHECK
+    # TAB 2: COMMAND PROFILE LEDGER
     # ==========================================
     with tab2:
-        st.header("📊 Senior Rater Profile Misfire Check")
-        st.markdown("Ensure you have the math to support a 'Most Qualified' (MQ) before routing the evaluation.")
+        st.header("📋 Command Profile Ledger")
+        st.markdown("""
+        Manage all rated grades simultaneously. Input your current profile numbers for each grade. 
+        The system will calculate your exact limits and forecast how many 'HQs' are needed to unlock your next 'MQ'.
+        """)
         
-        prof_col1, prof_col2 = st.columns(2)
-        with prof_col1:
-            eval_category = st.radio("Evaluation Type", ["OER (Officers - Max <50%)", "NCOER (SSG-CSM - Max <24%)"])
-        
-        with prof_col2:
-            current_total = st.number_input("Current Profile: TOTAL EVALS", min_value=0, value=0, step=1)
-            current_mqs = st.number_input("Current Profile: TOTAL MQs GIVEN", min_value=0, value=0, step=1)
+        # Initialize Ledger in session state
+        if 'profile_ledger' not in st.session_state:
+            st.session_state.profile_ledger = pd.DataFrame({
+                "Grade (e.g. MAJ)": ["CPT", "MAJ", "SFC"],
+                "Rule Limit": ["OER (< 50% Limit)", "OER (< 50% Limit)", "NCOER (< 24% Limit)"],
+                "Total Evals": [5, 2, 8],
+                "Total MQs Given": [2, 1, 1]
+            })
 
-        st.divider()
+        edited_ledger = st.data_editor(
+            st.session_state.profile_ledger,
+            column_config={
+                "Grade (e.g. MAJ)": st.column_config.TextColumn("Grade", required=True),
+                "Rule Limit": st.column_config.SelectboxColumn("Rule Limit", options=RANK_GROUPS, required=True),
+                "Total Evals": st.column_config.NumberColumn("Total Evals", min_value=0, step=1, required=True),
+                "Total MQs Given": st.column_config.NumberColumn("Total MQs Given", min_value=0, step=1, required=True)
+            },
+            num_rows="dynamic", use_container_width=True, hide_index=True
+        )
+
+        st.subheader("📊 Profile Health Dashboard")
         
-        if current_total >= 0:
-            # Simulate adding this new evaluation as an MQ
-            new_total = current_total + 1
-            new_mqs = current_mqs + 1
+        dashboard_data = []
+        for index, row in edited_ledger.iterrows():
+            grade = row["Grade (e.g. MAJ)"]
+            rule = row["Rule Limit"]
+            total = row["Total Evals"]
+            mqs = row["Total MQs Given"]
             
-            # Math limits based on AR 623-3
-            if "OER" in eval_category:
-                mq_limit = 0.499 # Less than 50%
-            else:
-                mq_limit = 0.239 # Less than 24%
+            if pd.isna(grade) or pd.isna(rule): continue
+            
+            total = 0 if pd.isna(total) else int(total)
+            mqs = 0 if pd.isna(mqs) else int(mqs)
 
-            projected_percentage = new_mqs / new_total if new_total > 0 else 0
+            pct, status, hqs_needed = calculate_profile_health(total, mqs, rule)
+            
+            dashboard_data.append({
+                "Grade": grade,
+                "Current %": f"{pct * 100:.1f}%",
+                "Status & Action Required": status
+            })
 
-            st.subheader("Projected Profile if you give an MQ today:")
-            st.write(f"Total Evals: **{new_total}** | Total MQs: **{new_mqs}** | Profile: **{(projected_percentage * 100):.1f}%**")
-
-            if projected_percentage <= mq_limit:
-                st.success("✅ **CLEAR TO GIVE MQ:** This evaluation will not cause a misfire.")
-            else:
-                st.error("🛑 **PROFILE MISFIRE WARNING!**")
-                st.markdown(f"Giving an MQ right now will spike your profile to **{(projected_percentage * 100):.1f}%** (which violates the limit). You must give a **Highly Qualified (HQ)** or wait for more total evaluations to mature the profile.")
+        if dashboard_data:
+            df_dash = pd.DataFrame(dashboard_data)
+            
+            # Apply dynamic color coding to the dashboard output
+            def highlight_status(val):
+                if 'Clear' in str(val): return 'color: #2e7d32; font-weight: bold'
+                if 'Misfire' in str(val): return 'color: #d32f2f; font-weight: bold'
+                return ''
+                
+            st.dataframe(df_dash.style.applymap(highlight_status, subset=['Status & Action Required']), use_container_width=True, hide_index=True)
+        else:
+            st.info("Add grades to the ledger above to view health metrics.")
 
 if __name__ == "__main__":
     main()
