@@ -80,11 +80,11 @@ if 'profile_ledger' in st.session_state and list(st.session_state.profile_ledger
 
 # --- MAIN APP ROUTING ---
 def main():
-    st.title("🦅 G-1 Executive Dashboard (v8.3)")
+    st.title("🦅 G-1 Executive Dashboard (v8.4)")
     
     with st.expander("📖 Quick Start Guide (Read Me First)"):
         st.markdown("""
-        **For 90% of evaluations, you ONLY need Tab 1.**
+        **For 95% of evaluations, you ONLY need Tab 1.**
         1. Select your Component and Eval Type.
         2. Click the Date Box and select your **From** and **Thru** dates on the calendar.
         3. *Done.* Scroll down for your exact IPPS-A output.
@@ -149,6 +149,20 @@ def main():
 
         # --- THE NEW INTAKE FORM FOR NON-RATED TIME ---
         st.header("3. Non-Rated Time (Optional - Skip if none)")
+        
+        # Injecting the Point-of-Need Glossary
+        with st.expander("📚 Non-Rated Code Glossary (Click to view definitions)"):
+            st.markdown("""
+            * **A (AWOL):** Absent without leave.
+            * **C (Confinement):** Military or civilian confinement.
+            * **E (Leave):** Authorized leave of 30 or more consecutive days.
+            * **I (In Transit):** Travel time between duty stations (PCS).
+            * **P (Patient):** Hospitalization (including convalescent leave).
+            * **Q (Rater Qual):** Rater lacks minimum time (e.g., rater leaves before 90/120 days).
+            * **S (Student):** Attending military/civilian school full-time.
+            * **T (TDY):** Temporary duty away from the rated position.
+            """)
+            
         if 'nr_periods' not in st.session_state: st.session_state.nr_periods = pd.DataFrame(columns=EXPECTED_NR_COLS)
         
         st.subheader("Add a Non-Rated Period")
@@ -181,7 +195,6 @@ def main():
             }, num_rows="dynamic", use_container_width=True, hide_index=True
         )
         
-        # Save edits back to session state so deletions work
         st.session_state.nr_periods = edited_df
 
         total_nr_days, valid_periods, ipps_a_codes = 0, [], []
