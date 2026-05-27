@@ -188,3 +188,6 @@ def main():
             st.success(f"**DA Form Output (Box 1i):** {rated_months} Months, {leftover_days} Days")
 
             # --- IPPS
+
+if __name__ == "__main__":
+    main()
