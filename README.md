@@ -9,4 +9,4 @@ This is a web-based application built with Python and Streamlit to automate the 
 * Dynamically adds and subtracts non-rated periods using standard DA PAM 623-3 codes.
 * Flags overlapping non-rated dates.
 * Alerts the user if the evaluation falls below the 90-day minimum threshold.
-* Outputs the exact Rated Months and Rated Days required for Box 1i on DA Form 67-11 or DA Form 2166-9.
+* Outputs the exact Rated Months and Rated Days required for Box 1i on DA Form 67-10 or DA Form 2166-9.
