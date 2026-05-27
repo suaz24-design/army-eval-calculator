@@ -5,7 +5,7 @@ import altair as alt
 import math
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Army Eval Planner v5.0", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Army Eval Planner v5.1", page_icon="🦅", layout="wide")
 
 # --- DATA DICTIONARIES ---
 NON_RATED_CODES = [
@@ -71,20 +71,18 @@ def calculate_profile_health(total, mqs, limit_type):
         return current_pct, f"Clear (Can give {available} MQ{'s' if available > 1 else ''})", 0
     else:
         # Calculate how many HQs needed to unlock the next MQ
-        # (mqs + 1) / (total + 1 + HQs_needed) <= limit
-        # hqs_needed >= ((mqs + 1) / limit) - total - 1
         hqs_needed = math.ceil(((mqs + 1) / limit) - total - 1)
         return current_pct, f"Misfire Risk (Need {hqs_needed} HQ{'s' if hqs_needed > 1 else ''} first)", hqs_needed
 
 # --- MAIN APP ---
 def main():
-    st.title("🦅 Army Evaluation Planner & Kiosk v5.0")
+    st.title("🦅 Army Evaluation Planner & Kiosk v5.1")
     st.markdown("Strictly automated IPPS-A date math and Command Profile Ledger.")
 
     tab1, tab2 = st.tabs(["📅 Dates & IPPS-A Output", "📋 Command Profile Ledger"])
 
     # ==========================================
-    # TAB 1: DATE CALCULATOR (Remains Unchanged)
+    # TAB 1: DATE CALCULATOR 
     # ==========================================
     with tab1:
         st.header("1. Evaluation Parameters")
@@ -129,8 +127,9 @@ def main():
             edited_df = st.data_editor(
                 st.session_state.nr_periods,
                 column_config={
-                    "Start (YYYYMMDD)": st.column_config.TextColumn("Start Date", max_chars=8, validate="^\d{8}$", required=True),
-                    "End (YYYYMMDD)": st.column_config.TextColumn("End Date", max_chars=8, validate="^\d{8}$", required=True),
+                    # Using raw strings (r"") for regex to prevent Python warnings
+                    "Start (YYYYMMDD)": st.column_config.TextColumn("Start Date", max_chars=8, validate=r"^\d{8}$", required=True),
+                    "End (YYYYMMDD)": st.column_config.TextColumn("End Date", max_chars=8, validate=r"^\d{8}$", required=True),
                     "Code": st.column_config.SelectboxColumn("Non-Rated Code", options=NON_RATED_CODES, required=True)
                 },
                 num_rows="dynamic", use_container_width=True, hide_index=True
@@ -176,7 +175,7 @@ def main():
             else:
                 st.success(f"✅ **VALID EVALUATION:** Minimum rating requirements met.")
 
-            st.code(f"FROM: {from_date.strftime('%Y%m%d')}\nTHRU: {thru_date.strftime('%Y%m%d')}\n\nNON-RATED:\n{chr(10).join(ipps_a_codes) if ipps_a_codes else 'None'}", language="text")
+            st.code(f"FROM: {from_date.strftime('%Y%m%d')}\nTHRU: {thru_date.strftime('%Y%m%d')}\n\nNON-RATED:\n{chr(10).join(ipps_a_codes) if ipps_a_codes else 'No Non-Rated Time'}", language="text")
 
     # ==========================================
     # TAB 2: COMMAND PROFILE LEDGER
@@ -239,7 +238,13 @@ def main():
                 if 'Misfire' in str(val): return 'color: #d32f2f; font-weight: bold'
                 return ''
                 
-            st.dataframe(df_dash.style.applymap(highlight_status, subset=['Status & Action Required']), use_container_width=True, hide_index=True)
+            # FIX: Safely try the new Pandas map(), fallback to older applymap() if needed
+            try:
+                styled_dash = df_dash.style.map(highlight_status, subset=['Status & Action Required'])
+            except AttributeError:
+                styled_dash = df_dash.style.applymap(highlight_status, subset=['Status & Action Required'])
+
+            st.dataframe(styled_dash, use_container_width=True, hide_index=True)
         else:
             st.info("Add grades to the ledger above to view health metrics.")
 
