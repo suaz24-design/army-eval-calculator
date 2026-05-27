@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import io
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Army Eval Date Calculator", page_icon="🦅", layout="wide")
+st.set_page_config(page_title="Army Eval Date Calculator v3.0", page_icon="🦅", layout="wide")
 
 # --- DATA DICTIONARIES ---
 NON_RATED_CODES = [
